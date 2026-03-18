@@ -26,19 +26,16 @@ Silver Schema: silver (with SCD Type 2 and streaming)
 Gold Schema: gold (materialized views for analytics)
 """
 
-import dlt
+from pyspark import pipelines as dp
 from pyspark.sql import functions as F
 from pyspark.sql.types import *
 from datetime import datetime
-
-# Import SparkSession for reading external tables
-from pyspark.sql import SparkSession
 
 # =============================================================================
 # BRONZE LAYER - Raw Data Ingestion with Change Data Feed
 # =============================================================================
 
-@dlt.table(
+@dp.table(
     name="src_accounts_bronze",
     comment="Bronze layer for accounts data with CDC incremental loading from latest version",
     table_properties={
@@ -51,7 +48,6 @@ def src_accounts_bronze():
     """
     Bronze layer for accounts - CDC incremental loading starting from latest version
     """
-    spark = SparkSession.getActiveSession()
     return (
         spark.readStream
         .option("readChangeFeed", "true")
@@ -67,7 +63,7 @@ def src_accounts_bronze():
     )
 
 
-@dlt.table(
+@dp.table(
     name="src_customer_bronze",
     comment="Bronze layer for customer data with CDC incremental loading from latest version",
     table_properties={
@@ -80,7 +76,6 @@ def src_customer_bronze():
     """
     Bronze layer for customers - CDC incremental loading starting from latest version
     """
-    spark = SparkSession.getActiveSession()
     return (
         spark.readStream
         .option("readChangeFeed", "true")
@@ -96,7 +91,7 @@ def src_customer_bronze():
         .drop("_change_type","_commit_version", "_commit_timestamp")
     )
 
-@dlt.table(
+@dp.table(
     name="src_acct_tx_bronze",
     comment="Bronze layer for transaction data with CDC incremental loading from latest version",
     table_properties={
@@ -109,7 +104,6 @@ def src_acct_tx_bronze():
     """
     Bronze layer for transactions - CDC incremental loading starting from latest version
     """
-    spark = SparkSession.getActiveSession()
     return (
         spark.readStream
         .option("readChangeFeed", "true")
@@ -133,7 +127,7 @@ def src_acct_tx_bronze():
 # =============================================================================
 
 # Create the streaming table for accounts
-dlt.create_streaming_table(
+dp.create_streaming_table(
     name="accounts_silver",
     comment="SCD Type 2 streaming table for account data with AUTO CDC for INSERT and UPDATE operations",
     table_properties={
@@ -150,15 +144,15 @@ dlt.create_streaming_table(
 
 # Apply changes with AUTO CDC - handles INSERT, UPDATE, and DELETE operations
 # apply_as_deletes: marks records as deleted in SCD Type 2 when operation_type = 'delete'
-dlt.apply_changes(
+dp.create_auto_cdc_flow(
     target="accounts_silver",
     source="src_accounts_bronze",
     keys=["acct_id"],
-    sequence_by=F.col("commit_timestamp"),
+    sequence_by="commit_timestamp",
     ignore_null_updates=False,
-    apply_as_deletes=F.expr("operation_type = 'delete'"),  # Handle DELETE operations in SCD Type 2
+    apply_as_deletes="operation_type = 'delete'",  # Handle DELETE operations in SCD Type 2
     except_column_list=["operation_type", "commit_version", "commit_timestamp", "source_file", "created_date", "ingestion_timestamp"],
-    stored_as_scd_type="2"
+    stored_as_scd_type=2
 )
 
 #=============================================================================
@@ -166,7 +160,7 @@ dlt.apply_changes(
 #=============================================================================
 
 # Create the streaming table for customers
-dlt.create_streaming_table(
+dp.create_streaming_table(
     name="customers_silver",
     comment="SCD Type 2 streaming table for customer data with AUTO CDC for INSERT and UPDATE operations",
     table_properties={
@@ -184,20 +178,20 @@ dlt.create_streaming_table(
 
 # Apply changes with AUTO CDC - handles INSERT, UPDATE, and DELETE operations
 # apply_as_deletes: marks records as deleted in SCD Type 2 when operation_type = 'delete'
-dlt.apply_changes(
+dp.create_auto_cdc_flow(
     target="customers_silver",
     source="src_customer_bronze",
     keys=["customer_id"],
-    sequence_by=F.col("commit_timestamp"),
+    sequence_by="commit_timestamp",
     ignore_null_updates=False,
-    apply_as_deletes=F.expr("operation_type = 'delete'"),  # Handle DELETE operations in SCD Type 2
+    apply_as_deletes="operation_type = 'delete'",  # Handle DELETE operations in SCD Type 2
     except_column_list=["operation_type", "commit_version", "commit_timestamp", "source_file", "created_at", "ingestion_timestamp"],
-    stored_as_scd_type="2"
+    stored_as_scd_type=2
 )
 
 #transaction table
 
-dlt.create_streaming_table(
+dp.create_streaming_table(
     name="transactions_silver",
     comment="SCD Type 2 streaming table for transaction data with AUTO CDC for INSERT and UPDATE operations",
     table_properties={
@@ -215,22 +209,22 @@ dlt.create_streaming_table(
 
 # Apply changes with AUTO CDC - handles INSERT, UPDATE, and DELETE operations
 # apply_as_deletes: marks records as deleted in SCD Type 2 when operation_type = 'delete'
-dlt.apply_changes(
+dp.create_auto_cdc_flow(
     target="transactions_silver",
     source="src_acct_tx_bronze",
     keys=["transaction_id"],
-    sequence_by=F.col("commit_timestamp"),
+    sequence_by="commit_timestamp",
     ignore_null_updates=False,
-    apply_as_deletes=F.expr("operation_type = 'delete'"),  # Handle DELETE operations in SCD Type 2
+    apply_as_deletes="operation_type = 'delete'",  # Handle DELETE operations in SCD Type 2
     except_column_list=["operation_type", "commit_version", "commit_timestamp", "source_file", "created_date", "ingestion_timestamp"],
-    stored_as_scd_type="2"
+    stored_as_scd_type=2
 )
 
 # =============================================================================
 # GOLD LAYER - Business-Ready Analytics Materialized Views
 # =============================================================================
 
-@dlt.table(
+@dp.materialized_view(
     name="cust_tran_profile",
     comment="Customer transaction profile materialized view for analytics and BI",
     table_properties={
@@ -238,7 +232,7 @@ dlt.apply_changes(
         "delta.autoOptimize.autoCompact": "true"
     }
 )
-@dlt.expect_all({
+@dp.expect_all({
     "valid_customer_id": "customer_id IS NOT NULL",
     "valid_acct_id": "acct_id IS NOT NULL",
     "positive_transaction_count": "total_transactions > 0",
@@ -249,11 +243,11 @@ def cust_tran_profile():
     """
     Gold layer materialized view: Customer Transaction Profile
     Implements the exact SQL query from requirements
-    Note: DLT SCD Type 2 uses __END_AT IS NULL to filter for current records
+    Note: SCD Type 2 uses __END_AT IS NULL to filter for current records
     """
-    accounts = dlt.read("accounts_silver").filter(F.col("__END_AT").isNull())
-    customers = dlt.read("customers_silver").filter(F.col("__END_AT").isNull())
-    transactions = dlt.read("transactions_silver")
+    accounts = spark.read.table("accounts_silver").filter(F.col("__END_AT").isNull())
+    customers = spark.read.table("customers_silver").filter(F.col("__END_AT").isNull())
+    transactions = spark.read.table("transactions_silver")
     
     return (
         accounts.alias("src_accounts")
@@ -276,4 +270,3 @@ def cust_tran_profile():
         )
         .withColumn("profile_created_at", F.current_timestamp())
     )
-
